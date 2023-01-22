@@ -156,7 +156,7 @@ class Trainer:
 
         :return: best learning rate, best loss slope
         """
-        print("greedily searching lr using lrrt")
+        print("lr search using lrrt")
         slope_desired_found = False
         candidate_lrs = self.lrrt_initial_candidates
         lr_best_total = np.inf
@@ -211,7 +211,7 @@ class Trainer:
             if loss_val < loss_val_last:
                 torch.save(module, self.checkpoint_running)
                 torch.save(module, self.checkpoint_final)
-                print("loss improvement achieved, running checkpoint updated")
+                print("loss improvement achieved, final checkpoint updated")
                 loss_val_last = loss_val
                 es_violations = 0
             else:

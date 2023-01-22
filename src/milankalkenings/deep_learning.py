@@ -3,8 +3,8 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
-from torch.optim import Adam
+from torch.utils.data import DataLoader
+from torch.optim import Optimizer
 
 
 class Module(ABC, nn.Module):
@@ -56,10 +56,12 @@ class TrainerSetup:
         self.lrrt_max_decays = 100  # max number of candidate decays performed in lrrt
         self.lrrt_decay = 0.9
         self.lrrt_initial_candidates = np.array([1e-3, 1e-4, 1e-6])
+        self.es_max_violations = 2  # max number of early stopping violations
 
 
 class Trainer:
     def __init__(self, loader_train: DataLoader, loader_val: DataLoader, setup: TrainerSetup):
+        self.optimizer_class = torch.optim.Adam
         self.loader_train = loader_train
         self.loader_val = loader_val
         self.device = setup.device
@@ -74,13 +76,15 @@ class Trainer:
         self.lrrt_decay = setup.lrrt_decay
         self.lrrt_initial_candidates = setup.lrrt_initial_candidates
 
+        self.es_max_violations = setup.es_max_violations
+
     def forward_batch(self, module: Module, batch: list):
         x, y = batch
         x = x.to(self.device)
         y = y.to(self.device)
         return module(x=x, y=y)
 
-    def train_batch(self, module: Module, adam: Adam, batch: list, freeze_pretrained_layers: bool):
+    def train_batch(self, module: Module, optimizer: Optimizer, batch: list, freeze_pretrained_layers: bool):
         # freeze/unfreeze here: longer runtime, better encapsulation
         if freeze_pretrained_layers:
             module.freeze_pretrained_layers()
@@ -90,16 +94,16 @@ class Trainer:
         module.zero_grad()
         loss = self.forward_batch(module=module, batch=batch)["loss"]
         loss.backward()
-        adam.step()
+        optimizer.step()
         return float(loss)
 
-    def train_n_batches(self, module: Module, adam: Adam, n_batches: int, freeze_pretrained_layers: bool):
+    def train_n_batches(self, module: Module, optimizer: Optimizer, n_batches: int, freeze_pretrained_layers: bool):
         losses = []
         for train_iter, batch in enumerate(self.loader_train):
             if train_iter == n_batches:
                 break
 
-            losses.append(self.train_batch(module=module, adam=adam, batch=batch,
+            losses.append(self.train_batch(module=module, optimizer=optimizer, batch=batch,
                                            freeze_pretrained_layers=freeze_pretrained_layers))
             if (len(losses) % self.monitor_n_losses) == 0:
                 losses_last = np.array(losses[-self.monitor_n_losses:])
@@ -128,11 +132,11 @@ class Trainer:
         scores = self.forward_batch(module=module, batch=batch)["scores"]
         return torch.argmax(scores, dim=1)
 
-    def overfit_one_train_batch(self, module: Module, batch: list, adam: Adam, n_iters: int, freeze_pretrained_layers: bool):
+    def overfit_one_train_batch(self, module: Module, batch: list, optimizer: Optimizer, n_iters: int, freeze_pretrained_layers: bool):
         module.train()
         losses = []
         for iter in range(n_iters):
-            losses.append(self.train_batch(module=module, adam=adam, batch=batch,
+            losses.append(self.train_batch(module=module, optimizer=optimizer, batch=batch,
                                            freeze_pretrained_layers=freeze_pretrained_layers))
         return module, losses
 
@@ -159,8 +163,8 @@ class Trainer:
             candidate_slopes = np.zeros(shape=len(candidate_lrs))
             for i, lr_candidate in enumerate(candidate_lrs):
                 module = torch.load(self.checkpoint_running)
-                adam = Adam(params=module.parameters(), lr=lr_candidate)
-                candidate_slopes[i] = self.train_n_batches(module=module, adam=adam, n_batches=self.lrrt_n_batches,
+                optimizer = self.optimizer_class(params=module.parameters(), lr=lr_candidate)
+                candidate_slopes[i] = self.train_n_batches(module=module, optimizer=optimizer, n_batches=self.lrrt_n_batches,
                                                            freeze_pretrained_layers=freeze_pretrained_layers)[1]
             best_candidate_slope_id = np.argmin(candidate_slopes)
             best_candidate_slope = candidate_slopes[best_candidate_slope_id]
@@ -188,6 +192,7 @@ class Trainer:
         :param bool freeze_pretrained_layers:
         :return: early stopped trained module
         """
+        es_violations = 0
         module = torch.load(self.checkpoint_running)
         loss_train, loss_val_last = self.losses_epoch_eval(module=module)
         print("initial eval loss val", loss_val_last, "initial eval loss train", loss_train)
@@ -195,8 +200,8 @@ class Trainer:
             print("training epoch", epoch)
             lr_best, _ = self.lrrt(freeze_pretrained_layers=freeze_pretrained_layers)
             module = torch.load(self.checkpoint_running).to(self.device)
-            adam = Adam(params=module.parameters(), lr=lr_best)
-            self.train_n_batches(module=module, adam=adam, n_batches=len(self.loader_train),
+            optimizer = self.optimizer_class(params=module.parameters(), lr=lr_best)
+            self.train_n_batches(module=module, optimizer=optimizer, n_batches=len(self.loader_train),
                                  freeze_pretrained_layers=freeze_pretrained_layers)
 
             loss_train, loss_val = self.losses_epoch_eval(module=module)
@@ -205,8 +210,12 @@ class Trainer:
                 torch.save(module, self.checkpoint_running)
                 print("loss improvement achieved, running checkpoint updated")
                 loss_val_last = loss_val
+                es_violations = 0
             else:
-                print("no loss improvement achieved, early stopping")
-                break
+                es_violations += 1
+                print("no loss improvement achieved, early stopping violations:", es_violations, "of", self.es_max_violations)
+                if es_violations == self.es_max_violations:
+                    print("early stopping")
+                    break
         return torch.load(self.checkpoint_running)
 

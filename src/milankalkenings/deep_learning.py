@@ -51,6 +51,7 @@ class TrainerSetup:
         self.monitor_n_losses = 50  # prints loss slope after this amount of training steps
         self.checkpoint_initial = "../monitoring/checkpoint_initial.pkl"
         self.checkpoint_running = "../monitoring/checkpoint_running.pkl"
+        self.checkpoint_final = "../monitoring/checkpoint_final.pkl"
         self.lrrt_n_batches = 500  # batches used in lrrt for learning rate determination
         self.lrrt_slope_desired = 0  # exclusive border
         self.lrrt_max_decays = 100  # max number of candidate decays performed in lrrt
@@ -69,6 +70,7 @@ class Trainer:
 
         self.checkpoint_initial = setup.checkpoint_initial
         self.checkpoint_running = setup.checkpoint_running
+        self.checkpoint_final = setup.checkpoint_final
 
         self.lrrt_n_batches = setup.lrrt_n_batches
         self.lrrt_slope_desired = setup.lrrt_slope_desired
@@ -208,14 +210,16 @@ class Trainer:
             print("eval loss val", loss_val, "eval loss train", loss_train)
             if loss_val < loss_val_last:
                 torch.save(module, self.checkpoint_running)
+                torch.save(module, self.checkpoint_final)
                 print("loss improvement achieved, running checkpoint updated")
                 loss_val_last = loss_val
                 es_violations = 0
             else:
                 es_violations += 1
+                torch.save(module, self.checkpoint_running)
                 print("no loss improvement achieved, early stopping violations:", es_violations, "of", self.es_max_violations)
                 if es_violations == self.es_max_violations:
                     print("early stopping")
                     break
-        return torch.load(self.checkpoint_running)
+        return torch.load(self.checkpoint_final)
 

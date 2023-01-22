@@ -1,0 +1,13 @@
+Metadata-Version: 2.1
+Name: milankalkenings
+Version: 0.0.9
+Summary: basic deep learning functionalities
+Author: Milan Kalkenings
+Author-email: milankalkenings@outlook.com
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.6
+License-File: LICENSE
+
+tbd

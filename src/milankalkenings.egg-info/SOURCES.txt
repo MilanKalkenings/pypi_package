@@ -1,0 +1,10 @@
+LICENSE
+README.md
+pyproject.toml
+setup.cfg
+src/milankalkenings/__init__.py
+src/milankalkenings/deep_learning.py
+src/milankalkenings.egg-info/PKG-INFO
+src/milankalkenings.egg-info/SOURCES.txt
+src/milankalkenings.egg-info/dependency_links.txt
+src/milankalkenings.egg-info/top_level.txt

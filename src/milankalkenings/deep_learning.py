@@ -46,18 +46,30 @@ def make_reproducible(seed: int = 1):
 
 
 class TrainerSetup:
-    def __init__(self):
-        self.device = "cpu"
-        self.monitor_n_losses = 50  # prints loss slope after this amount of training steps
-        self.checkpoint_initial = "../monitoring/checkpoint_initial.pkl"
-        self.checkpoint_running = "../monitoring/checkpoint_running.pkl"
-        self.checkpoint_final = "../monitoring/checkpoint_final.pkl"
-        self.lrrt_n_batches = 500  # batches used in lrrt for learning rate determination
-        self.lrrt_slope_desired = 0  # exclusive border
-        self.lrrt_max_decays = 100  # max number of candidate decays performed in lrrt
-        self.lrrt_decay = 0.9
-        self.lrrt_initial_candidates = np.array([1e-3, 1e-4, 1e-6])
-        self.es_max_violations = 2  # max number of early stopping violations
+    def __init__(self,
+                 device: str = "cpu",
+                 monitor_n_losses: int = 50,
+                 checkpoint_initial: str = "../monitoring/checkpoint_initial.pkl",
+                 checkpoint_running: str = "../monitoring/checkpoint_running.pkl",
+                 checkpoint_final: str = "../monitoring/checkpoint_final.pkl",
+                 lrrt_n_batches: int = 49,
+                 lrrt_slope_desired: float = 0,
+                 lrrt_max_decays: int = 0,
+                 lrrt_decay: float = 0.9,
+                 lrrt_initial_candidates: np.ndarray = np.array([1e-3, 1e-4, 1e-6]),
+                 es_max_violations: int = 2):
+
+        self.device = device
+        self.monitor_n_losses = monitor_n_losses  # prints loss slope after this amount of training steps
+        self.checkpoint_initial = checkpoint_initial
+        self.checkpoint_running = checkpoint_running
+        self.checkpoint_final = checkpoint_final
+        self.lrrt_n_batches = lrrt_n_batches  # batches used in lrrt for learning rate determination
+        self.lrrt_slope_desired = lrrt_slope_desired  # exclusive border
+        self.lrrt_max_decays = lrrt_max_decays  # max number of candidate decays performed in lrrt
+        self.lrrt_decay = lrrt_decay
+        self.lrrt_initial_candidates = lrrt_initial_candidates
+        self.es_max_violations = es_max_violations  # max number of early stopping violations
 
 
 class Trainer:
@@ -223,3 +235,27 @@ class Trainer:
                     break
         return torch.load(self.checkpoint_final)
 
+    def train_n_epochs_initial_lrrt(self, n_epochs: int, freeze_pretrained_layers: bool):
+        """
+        determines the initial learning rate per epoch using lrrt.
+
+        :param int n_epochs: #training epochs after determining the initial learning rate with lrrt
+        :param bool freeze_pretrained_layers:
+        :return: trained module
+        """
+        module = torch.load(self.checkpoint_running)
+        loss_train, loss_val_last = self.losses_epoch_eval(module=module)
+        print("initial eval loss val", loss_val_last, "initial eval loss train", loss_train)
+        for epoch in range(1, n_epochs + 1):
+            print("training epoch", epoch)
+            lr_best, _ = self.lrrt(freeze_pretrained_layers=freeze_pretrained_layers)
+            module = torch.load(self.checkpoint_running).to(self.device)
+            optimizer = self.optimizer_class(params=module.parameters(), lr=lr_best)
+            self.train_n_batches(module=module, optimizer=optimizer, n_batches=len(self.loader_train),
+                                 freeze_pretrained_layers=freeze_pretrained_layers)
+
+            loss_train, loss_val = self.losses_epoch_eval(module=module)
+            print("eval loss val", loss_val, "eval loss train", loss_train)
+            torch.save(module, self.checkpoint_running)
+            torch.save(module, self.checkpoint_final)
+        return torch.load(self.checkpoint_final)

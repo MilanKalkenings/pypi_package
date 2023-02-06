@@ -111,7 +111,10 @@ class BatchHandler:
         scores = self.forward_batch(module=module, batch=batch)["scores"]
         return torch.argmax(scores, dim=1)
 
-    def train_n_batches(self, module: Module, optimizer: Optimizer, n_batches: int, loader: DataLoader,
+    def train_n_batches(self, module: Module,
+                        optimizer: Optimizer,
+                        n_batches: int,
+                        loader: DataLoader,
                         freeze_pretrained: bool):
         losses = []
         for train_iter, batch in enumerate(loader):
@@ -210,9 +213,9 @@ class Visualizer:
 
     def plot_lines(self, lines: list, title: str, subplot_titles: list, y_label: str, x_label: str, file_name: str):
         n_lines = len(lines)
-        n_rows = self.largest_divisor(n=n_lines)
-        n_cols = n_lines // n_rows
-        plt.figure(figsize=(20, 10))
+        n_cols = self.largest_divisor(n=n_lines)
+        n_rows = n_lines // n_cols
+        plt.figure(figsize=(n_cols*4, n_rows*4))
         plt.suptitle(title)
         for i in range(n_lines):
             plt.subplot(n_rows, n_cols, i + 1)
@@ -222,34 +225,6 @@ class Visualizer:
             plt.plot(range(len(lines[i])), lines[i])
         plt.tight_layout()
         plt.savefig(f"../monitoring/{file_name}.png")
-
-    def debug_lr(self, n_iters: int, batch_debug: list,
-                 lr_candidates: list = [5e-1, 1e-1, 5e-3, 1e-3, 5e-4, 1e-4, 5e-5, 1e-5, 5e-6, 1e-6],
-                 fig_name: str = "lr_debug"):
-        """
-        :param lr_candidates: len(lr_candidates) % 2 == 0
-        :param n_iters:
-        :param batch_debug:
-        :param fig_name:
-        :return:
-        """
-        plt.figure(figsize=(20, 10))
-        plt.suptitle("overfitting one batch with various learning rates")
-        for i, cand in enumerate(lr_candidates):
-            mimo = torch.load(self.setup.checkpoint_initial)
-            adam = torch.optim.Adam(params=mimo.parameters(), lr=cand)
-            _, losses_debug = self.overfit_one_train_batch(module=mimo,
-                                                           batch=batch_debug,
-                                                           optimizer=adam,
-                                                           n_iters=n_iters,
-                                                           freeze_pretrained=False)
-            plt.subplot(2, int(len(lr_candidates) / 2), i + 1)
-            plt.title("lr: " + str(cand))
-            plt.ylabel("loss")
-            plt.xlabel("training iteration")
-            plt.plot(torch.arange(len(losses_debug)), losses_debug)
-        plt.tight_layout()
-        plt.savefig(f"../monitoring/{fig_name}.png")
 
 
 class Trainer(BatchHandler):
@@ -292,13 +267,13 @@ class Trainer(BatchHandler):
             torch.save(module, self.setup.checkpoint_final)
         return torch.load(self.setup.checkpoint_final)
 
-    def train_n_epochs_early_stop_initial_lrrt(self, max_epochs: int, freeze_pretrained_layers: bool):
+    def train_n_epochs_early_stop_initial_lrrt(self, max_epochs: int, freeze_pretrained: bool = False):
         """
         determines the initial learning rate per epoch using lrrt.
         early stops (naively after one early stop violation)
 
         :param int max_epochs: max #training epochs after determining the initial learning rate with lrrt
-        :param bool freeze_pretrained_layers:
+        :param bool freeze_pretrained:
         :return: early stopped trained module
         """
         es_violations = 0
@@ -307,11 +282,15 @@ class Trainer(BatchHandler):
         print("initial eval loss val", loss_val_last, "initial eval loss train", loss_train)
         for epoch in range(1, max_epochs + 1):
             print("training epoch", epoch)
-            lr_best, _ = self.lrrt(freeze_pretrained=freeze_pretrained_layers, loader=self.setup.loader_train)
+            lr_best, _ = self.lrrt(freeze_pretrained=freeze_pretrained,
+                                   loader=self.setup.loader_train)
             module = torch.load(self.setup.checkpoint_running).to(self.setup.device)
             optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr_best)
-            self.train_n_batches(module=module, optimizer=optimizer, n_batches=len(self.setup.loader_train),
-                                 freeze_pretrained=freeze_pretrained_layers, loader=self.setup.loader_train)
+            self.train_n_batches(module=module,
+                                 optimizer=optimizer,
+                                 n_batches=len(self.setup.loader_train),
+                                 freeze_pretrained=freeze_pretrained,
+                                 loader=self.setup.loader_train)
 
             loss_train, loss_val = self.losses_epoch_eval(module=module)
             print("eval loss val", loss_val, "eval loss train", loss_train)

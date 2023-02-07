@@ -211,7 +211,38 @@ class Visualizer:
             i -= 1
         return 1
 
-    def plot_lines(self, lines: list, title: str, subplot_titles: list, y_label: str, x_label: str, file_name: str):
+    def lines_multiplot(self, lines: list, title: str, multiplot_titles: list, y_label: str, x_label: str, file_name: str):
+        """
+        creates multiple lines in the same subplot
+        :param lines:
+        :param title:
+        :param multiplot_titles:
+        :param y_label:
+        :param x_label:
+        :param file_name:
+        :return:
+        """
+        plt.figure(figsize=(4, 4))
+        for i, line in enumerate(lines):
+            plt.plot(range(len(line)), line, label=multiplot_titles[i])
+        plt.ylabel = y_label
+        plt.xlabel = x_label
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f"../monitoring/{file_name}.png")
+
+    def lines_subplot(self, lines: list, title: str, subplot_titles: list, y_label: str, x_label: str, file_name: str):
+        """
+        creates multiple lines in individual subplots
+
+        :param lines:
+        :param title:
+        :param subplot_titles:
+        :param y_label:
+        :param x_label:
+        :param file_name:
+        :return:
+        """
         n_lines = len(lines)
         n_cols = self.largest_divisor(n=n_lines)
         n_rows = n_lines // n_cols
@@ -274,16 +305,28 @@ class Trainer(BatchHandler):
 
         :param int max_epochs: max #training epochs after determining the initial learning rate with lrrt
         :param bool freeze_pretrained:
-        :return: early stopped trained module
+        :return: early stopped trained module, lrrt chosen learning rates, epoch train losses, epoch val losses
         """
         es_violations = 0
+        losses_train = []
+        losses_val = []
+        best_lrs = []
+
         module = torch.load(self.setup.checkpoint_running)
         loss_train, loss_val_last = self.losses_epoch_eval(module=module)
         print("initial eval loss val", loss_val_last, "initial eval loss train", loss_train)
+        losses_train.append(loss_train)
+        losses_val.append(loss_val_last)
+        best_lrs.append(0)
+
         for epoch in range(1, max_epochs + 1):
             print("training epoch", epoch)
+
+            # lrrt
             lr_best, _ = self.lrrt(freeze_pretrained=freeze_pretrained,
                                    loader=self.setup.loader_train)
+
+            # epoch training
             module = torch.load(self.setup.checkpoint_running).to(self.setup.device)
             optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr_best)
             self.train_n_batches(module=module,
@@ -292,8 +335,14 @@ class Trainer(BatchHandler):
                                  freeze_pretrained=freeze_pretrained,
                                  loader=self.setup.loader_train)
 
+            # epoch evaluation
             loss_train, loss_val = self.losses_epoch_eval(module=module)
             print("eval loss val", loss_val, "eval loss train", loss_train)
+            losses_train.append(loss_train)
+            losses_val.append(loss_val)
+            best_lrs.append(lr_best)
+
+            # early stopping checkpointing
             if loss_val < loss_val_last:
                 torch.save(module, self.setup.checkpoint_running)
                 torch.save(module, self.setup.checkpoint_final)
@@ -307,4 +356,4 @@ class Trainer(BatchHandler):
                 if es_violations == self.setup.es_max_violations:
                     print("early stopping")
                     break
-        return torch.load(self.setup.checkpoint_final)
+        return torch.load(self.setup.checkpoint_final), best_lrs, losses_train, losses_val

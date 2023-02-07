@@ -251,8 +251,8 @@ class Visualizer:
         for i in range(n_lines):
             plt.subplot(n_rows, n_cols, i + 1)
             plt.title(subplot_titles[i])
-            plt.ylabel(y_label)
-            plt.xlabel(x_label)
+            plt.ylabel = y_label
+            plt.xlabel = x_label
             plt.plot(range(len(lines[i])), lines[i])
         plt.tight_layout()
         plt.savefig(f"../monitoring/{file_name}.png")

@@ -7,7 +7,17 @@ from torch.utils.data import DataLoader
 from torch.optim import Optimizer
 import matplotlib.pyplot as plt
 import itertools
+import time
 
+
+def load_secure(path: str):
+    while True:
+        try:
+            module = torch.load(path)
+            break
+        except:
+            time.sleep(0.1)
+    return module
 
 class Module(ABC, nn.Module):
     def __init__(self):
@@ -170,7 +180,7 @@ class BatchHandler:
         for decay_it in range(self.setup.lrrt_max_decays + 1):
             candidate_slopes = np.zeros(shape=len(candidate_lrs))
             for i, lr_candidate in enumerate(candidate_lrs):
-                module = torch.load(self.setup.checkpoint_running)
+                module = load_secure(self.setup.checkpoint_running)
                 optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr_candidate)
                 candidate_slopes[i] = self.train_n_batches(module=module,
                                                            optimizer=optimizer,
@@ -305,7 +315,7 @@ class Trainer(BatchHandler):
         losses_val = []
         best_lrs = []
 
-        module = torch.load(self.setup.checkpoint_running)
+        module = load_secure(self.setup.checkpoint_running)
         loss_train, loss_val_last = self.losses_epoch_eval(module=module)
         print("initial eval loss val", loss_val_last, "initial eval loss train", loss_train)
         losses_train.append(loss_train)
@@ -320,7 +330,7 @@ class Trainer(BatchHandler):
                                    loader=self.setup.loader_train)
 
             # epoch training
-            module = torch.load(self.setup.checkpoint_running).to(self.setup.device)
+            module = load_secure(self.setup.checkpoint_running).to(self.setup.device)
             optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr_best)
             self.train_n_batches(module=module,
                                  optimizer=optimizer,
@@ -349,12 +359,12 @@ class Trainer(BatchHandler):
                 if es_violations == self.setup.es_max_violations:
                     print("early stopping")
                     break
-        return torch.load(self.setup.checkpoint_final), best_lrs, losses_train, losses_val
+        return load_secure(self.setup.checkpoint_final), best_lrs, losses_train, losses_val
 
     def train_overkill_one_epoch(self, lr_initial: float, freeze_pretrained: bool):
         violation_counter = len(self.setup.loader_train)
         best_lrs = []
-        module = torch.load(self.setup.checkpoint_running)
+        module = load_secure(self.setup.checkpoint_running)
         loss_val_last = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
         for i, batch in enumerate(self.setup.loader_train):
             print("iter", i+1, "of", len(self.setup.loader_train))
@@ -368,7 +378,7 @@ class Trainer(BatchHandler):
                     best_lrs.append(lr)
                     violation_counter -= 1
                     break
-                module = torch.load(self.setup.checkpoint_running)
+                module = load_secure(self.setup.checkpoint_running)
                 optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr)
                 self.train_batch(module=module, optimizer=optimizer, batch=batch, freeze_pretrained=freeze_pretrained)
                 loss = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
@@ -380,7 +390,7 @@ class Trainer(BatchHandler):
         losses_val = []
         best_lrs = []
         lr = self.setup.overkill_initial_lr
-        module = torch.load(self.setup.checkpoint_running)
+        module = load_secure(self.setup.checkpoint_running)
         losses_train.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_train))
         losses_val.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val))
         for epoch in range(max_epochs):
@@ -388,7 +398,7 @@ class Trainer(BatchHandler):
             best_lrs_epoch, loss_val_epoch, violations = self.train_overkill_one_epoch(freeze_pretrained=freeze_pretrained, lr_initial=lr)
             best_lrs.append(best_lrs_epoch)
             losses_val.append(loss_val_epoch)
-            module = torch.load(self.setup.checkpoint_running)
+            module = load_secure(self.setup.checkpoint_running)
             losses_train.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_train))
             print("train loss:", losses_train[-1])
             print("val loss:", losses_val[-1])

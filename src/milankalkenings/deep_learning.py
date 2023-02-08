@@ -64,6 +64,7 @@ class Setup:
                  overkill_initial_lr: float = 0.005,
                  overkill_decay: float = 0.9,
                  overkill_max_violations: int = None,
+                 overkill_max_decays: int = 10,
                  es_max_violations: int = 2,
                  optimizer_class=torch.optim.Adam):
         self.loader_train = loader_train
@@ -90,6 +91,7 @@ class Setup:
             self.overkill_max_violations = len(self.loader_train)
         else:
             self.overkill_max_violations = overkill_max_violations
+        self.overkill_max_decays = overkill_max_decays
 
         # early stopping
         self.es_max_violations = es_max_violations
@@ -358,7 +360,7 @@ class Trainer(BatchHandler):
             print("iter", i+1, "of", len(self.setup.loader_train))
             lr = lr_initial
             loss = np.inf
-            for i in range(self.setup.lrrt_max_decays):
+            for i in range(self.setup.overkill_max_decays):
                 if loss < loss_val_last:
                     print("improvement, loss", loss)
                     loss_val_last = loss
@@ -370,14 +372,14 @@ class Trainer(BatchHandler):
                 optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr)
                 self.train_batch(module=module, optimizer=optimizer, batch=batch, freeze_pretrained=freeze_pretrained)
                 loss = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
-                lr = lr * self.setup.lrrt_decay
+                lr = lr * self.setup.overkill_decay
         return best_lrs, loss, violation_counter
 
-    def train_overkill(self, max_epochs: int, lr_initial: float, freeze_pretrained: bool = False):
+    def train_overkill(self, max_epochs: int, freeze_pretrained: bool = False):
         losses_train = []
         losses_val = []
         best_lrs = []
-        lr = lr_initial
+        lr = self.setup.overkill_initial_lr
         module = torch.load(self.setup.checkpoint_running)
         losses_train.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_train))
         losses_val.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val))

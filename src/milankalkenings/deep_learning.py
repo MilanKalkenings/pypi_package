@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import Optimizer
 import matplotlib.pyplot as plt
+import itertools
 
 
 class Module(ABC, nn.Module):
@@ -60,23 +61,38 @@ class Setup:
                  lrrt_max_decays: int = 0,
                  lrrt_decay: float = 0.9,
                  lrrt_initial_candidates: np.ndarray = np.array([1e-3, 1e-4, 1e-6]),
+                 overkill_initial_lr: float = 0.005,
+                 overkill_decay: float = 0.9,
+                 overkill_max_violations: int = None,
                  es_max_violations: int = 2,
                  optimizer_class=torch.optim.Adam):
         self.loader_train = loader_train
         self.loader_val = loader_val
         self.loader_test = loader_test
         self.device = device
+        self.optimizer_class = optimizer_class
         self.monitor_n_losses = monitor_n_losses  # prints loss slope after this amount of training steps
         self.checkpoint_initial = checkpoint_initial
         self.checkpoint_running = checkpoint_running
         self.checkpoint_final = checkpoint_final
+
+        # lrrt
         self.lrrt_n_batches = lrrt_n_batches  # batches used in lrrt for learning rate determination
         self.lrrt_slope_desired = lrrt_slope_desired  # exclusive border
         self.lrrt_max_decays = lrrt_max_decays  # max number of candidate decays performed in lrrt
         self.lrrt_decay = lrrt_decay
         self.lrrt_initial_candidates = lrrt_initial_candidates
-        self.es_max_violations = es_max_violations  # max number of early stopping violations
-        self.optimizer_class = optimizer_class
+
+        # overkill
+        self.overkill_initial_lr = overkill_initial_lr
+        self.overkill_decay = overkill_decay
+        if overkill_max_violations is None:
+            self.overkill_max_violations = len(self.loader_train)
+        else:
+            self.overkill_max_violations = overkill_max_violations
+
+        # early stopping
+        self.es_max_violations = es_max_violations
 
 
 class BatchHandler:
@@ -273,31 +289,6 @@ class Trainer(BatchHandler):
         loss_epoch_val = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
         return loss_epoch_train, loss_epoch_val
 
-    def train_n_epochs_initial_lrrt(self, n_epochs: int, freeze_pretrained: bool = False):
-        """
-        determines the initial learning rate per epoch using lrrt.
-
-        :param int n_epochs: #training epochs after determining the initial learning rate with lrrt
-        :param bool freeze_pretrained:
-        :return: trained module
-        """
-        module = torch.load(self.setup.checkpoint_running)
-        loss_train, loss_val_last = self.losses_epoch_eval(module=module)
-        print("initial eval loss val", loss_val_last, "initial eval loss train", loss_train)
-        for epoch in range(1, n_epochs + 1):
-            print("training epoch", epoch)
-            lr_best, _ = self.lrrt(freeze_pretrained=freeze_pretrained, loader=self.setup.loader_train)
-            module = torch.load(self.setup.checkpoint_running).to(self.setup.device)
-            optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr_best)
-            self.train_n_batches(module=module, optimizer=optimizer, n_batches=len(self.setup.loader_train),
-                                 freeze_pretrained=freeze_pretrained, loader=self.setup.loader_train)
-
-            loss_train, loss_val = self.losses_epoch_eval(module=module)
-            print("eval loss val", loss_val, "eval loss train", loss_train)
-            torch.save(module, self.setup.checkpoint_running)
-            torch.save(module, self.setup.checkpoint_final)
-        return torch.load(self.setup.checkpoint_final)
-
     def train_n_epochs_early_stop_initial_lrrt(self, max_epochs: int, freeze_pretrained: bool = False):
         """
         determines the initial learning rate per epoch using lrrt.
@@ -357,3 +348,51 @@ class Trainer(BatchHandler):
                     print("early stopping")
                     break
         return torch.load(self.setup.checkpoint_final), best_lrs, losses_train, losses_val
+
+    def train_overkill_one_epoch(self, lr_initial: float, freeze_pretrained: bool):
+        violation_counter = len(self.setup.loader_train)
+        best_lrs = []
+        module = torch.load(self.setup.checkpoint_running)
+        loss_val_last = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
+        for i, batch in enumerate(self.setup.loader_train):
+            print("iter", i+1, "of", len(self.setup.loader_train))
+            lr = lr_initial
+            loss = np.inf
+            for i in range(self.setup.lrrt_max_decays):
+                if loss < loss_val_last:
+                    print("improvement, loss", loss)
+                    loss_val_last = loss
+                    torch.save(module, self.setup.checkpoint_running)
+                    best_lrs.append(lr)
+                    violation_counter -= 1
+                    break
+                module = torch.load(self.setup.checkpoint_running)
+                optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr)
+                self.train_batch(module=module, optimizer=optimizer, batch=batch, freeze_pretrained=freeze_pretrained)
+                loss = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
+                lr = lr * self.setup.lrrt_decay
+        return best_lrs, loss, violation_counter
+
+    def train_overkill(self, max_epochs: int, lr_initial: float, freeze_pretrained: bool = False):
+        losses_train = []
+        losses_val = []
+        best_lrs = []
+        lr = lr_initial
+        module = torch.load(self.setup.checkpoint_running)
+        losses_train.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_train))
+        losses_val.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val))
+        for epoch in range(max_epochs):
+            print("epoch", epoch + 1)
+            best_lrs_epoch, loss_val_epoch, violations = self.train_overkill_one_epoch(freeze_pretrained=freeze_pretrained, lr_initial=lr)
+            best_lrs.append(best_lrs_epoch)
+            losses_val.append(loss_val_epoch)
+            module = torch.load(self.setup.checkpoint_running)
+            losses_train.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_train))
+            print("train loss:", losses_train[-1])
+            print("val loss:", losses_val[-1])
+            lr = float(torch.tensor(best_lrs[-1]).mean())
+            if violations >= self.setup.overkill_max_violations:
+                print("too few updates in this epoch, convergence")
+                break
+        torch.save(module, self.setup.checkpoint_final)
+        return module, list(itertools.chain(*best_lrs)), losses_train, losses_val

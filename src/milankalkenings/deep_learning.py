@@ -8,40 +8,80 @@ from torch.optim import Optimizer
 import matplotlib.pyplot as plt
 import itertools
 import time
+from typing import TypedDict, Union, List, Tuple
+
+# documentation
+ModuleOutput = TypedDict('ModuleOutput', {'loss': torch.Tensor, 'scores': torch.Tensor}, total=False)
 
 
-def load_secure(path: str):
+class Module(ABC, nn.Module):
+    """
+    abstract wrapper for torch.nn.Module.
+    adds abstract methods for (un)freezing pretrained layers.
+    ensures input and output format for the forward pass.
+    """
+    def __init__(self):
+        """
+        Initialize the base module.
+        """
+        super().__init__()
+
+    @abstractmethod
+    def freeze_pretrained(self):
+        """
+        Freeze the pretrained layers of the module.
+        """
+        pass
+
+    @abstractmethod
+    def unfreeze_pretrained(self):
+        """
+        Unfreeze the pretrained layers of the module.
+        """
+        pass
+
+    @abstractmethod
+    def forward(self,
+                x: Union[torch.Tensor, List[torch.Tensor]],
+                y: Union[torch.Tensor, List[torch.Tensor]]) -> ModuleOutput:
+        """
+        performs forward pass
+
+        :param x: input
+        :type x: Union[torch.Tensor, List[torch.Tensor]]
+
+        :param y: supervised labels
+        :type y: Union[torch.Tensor, List[torch.Tensor]]
+
+        :return: output of the forward pass
+        :rtype: ModuleOutput
+        """
+        pass
+
+
+def load_secure(file: str) -> Module:
+    """
+    securely loads a Module from a file located at "path"
+
+    :param file: module file
+    :type file: str
+    :return: Module loaded from the file
+    :rtype: Module
+    """
     while True:
         try:
-            module = torch.load(path)
+            module = torch.load(file)
             break
         except:
             time.sleep(0.1)
     return module
 
-class Module(ABC, nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    @abstractmethod
-    def freeze_pretrained(self):
-        pass
-
-    @abstractmethod
-    def unfreeze_pretrained(self):
-        pass
-
-    @abstractmethod
-    def forward(self, x, y):
-        """
-        :return: dict {"loss": , "scores", ...}
-        """
-        pass
-
 
 def make_reproducible(seed: int = 1):
     """
-    ensures reproducibility over multiple script runs and after restarting the local machine
+    make train/eval process reproducible.
+    :param seed: seed for random number generators
+    :type seed: int
     """
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -57,6 +97,66 @@ def make_reproducible(seed: int = 1):
 
 
 class Setup:
+    """
+    stores all the configurations for train/eval process
+
+    :param loader_train: DataLoader for the training set
+    :type loader_train: torch.utils.data.DataLoader
+
+    :param loader_val: DataLoader for the validation set
+    :type loader_val: torch.utils.data.DataLoader
+
+    :param loader_test: DataLoader for the test set
+    :type loader_test: torch.utils.data.DataLoader
+
+    :param device: device to run the training process on.
+    :type device: str
+
+    :param monitor_n_losses: the number of steps after which the loss slope is printed.
+    :type monitor_n_losses: int
+
+    :param checkpoint_initial: path to the initial checkpoint.
+    :type checkpoint_initial: str
+
+    :param checkpoint_running: path to the running checkpoint.
+    :type checkpoint_running: str
+
+    :param checkpoint_final: path to the final checkpoint.
+    :type checkpoint_final: str
+
+    :param lrrt_n_batches: number of batches used in the learning rate range test.
+    :type lrrt_n_batches: int
+
+    :param lrrt_slope_desired: exclusive border used in the learning rate range test.
+    :type lrrt_slope_desired: float
+
+    :param lrrt_max_decays: maximum number of learning rate decays performed in the learning rate range test.
+    :type lrrt_max_decays: int
+
+    :param lrrt_decay: decay factor used in the learning rate range test.
+    :type lrrt_decay: float
+
+    :param lrrt_initial_candidates: initial candidate learning rates used in the learning rate range test.
+    :type lrrt_initial_candidates: np.ndarray
+
+    :param overkill_initial_lr: initial learning rate used in overkill training
+    :type overkill_initial_lr: float
+
+    :param overkill_decay: learning rate decay factor used in overkill training
+    :type overkill_decay: float
+
+    :param overkill_max_violations: maximum number of violations allowed in overkill training
+    :type overkill_max_violations: int
+
+    :param overkill_max_decays: maximum number of learning rate decays allowed in overkill training
+    :type overkill_max_decays: int
+
+    :param es_max_violations: maximum number of violations allowed in early stopping
+    :type es_max_violations: int
+
+    :param optimizer_class: optimizer class used for the training process
+    :type optimizer_class: type[torch.optim.Optimizer]
+    """
     def __init__(self,
                  loader_train: DataLoader,
                  loader_val: DataLoader,
@@ -82,15 +182,15 @@ class Setup:
         self.loader_test = loader_test
         self.device = device
         self.optimizer_class = optimizer_class
-        self.monitor_n_losses = monitor_n_losses  # prints loss slope after this amount of training steps
+        self.monitor_n_losses = monitor_n_losses
         self.checkpoint_initial = checkpoint_initial
         self.checkpoint_running = checkpoint_running
         self.checkpoint_final = checkpoint_final
 
         # lrrt
-        self.lrrt_n_batches = lrrt_n_batches  # batches used in lrrt for learning rate determination
-        self.lrrt_slope_desired = lrrt_slope_desired  # exclusive border
-        self.lrrt_max_decays = lrrt_max_decays  # max number of candidate decays performed in lrrt
+        self.lrrt_n_batches = lrrt_n_batches
+        self.lrrt_slope_desired = lrrt_slope_desired
+        self.lrrt_max_decays = lrrt_max_decays
         self.lrrt_decay = lrrt_decay
         self.lrrt_initial_candidates = lrrt_initial_candidates
 
@@ -108,16 +208,59 @@ class Setup:
 
 
 class BatchHandler:
+    """
+    handles data in batch wise manner for train/eval.
+
+    :ivar setup: configurations
+    :vartype attr1: Setup
+    """
     def __init__(self, setup: Setup):
         self.setup = setup
 
-    def forward_batch(self, module: Module, batch: list):
+    def forward_batch(self,
+                      module: Module,
+                      batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]) -> ModuleOutput:
+        """
+        performs a forward pass with a given module and batch.
+
+        :param module: torch module with specified inputs and outputs
+        :type module: Module
+
+        :param batch: batch containing x and y
+        :type batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]
+
+        :return: output of the forward pass
+        :rtype: ModuleOutput
+        """
+
         x, y = batch
         x = x.to(self.setup.device)
         y = y.to(self.setup.device)
         return module(x=x, y=y)
 
-    def train_batch(self, module: Module, optimizer: Optimizer, batch: list, freeze_pretrained: bool = False):
+    def train_batch(self,
+                    module: Module,
+                    optimizer: Optimizer,
+                    batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
+                    freeze_pretrained: bool = False) -> float:
+        """
+        train on one batch
+
+        :param module: module that has to be trained
+        :type module: Module
+
+        :param optimizer: optimizer used to perform the update step
+        :type optimizer: Optimizer
+
+        :param batch: batch containing x, y
+        :type batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]
+
+        :param freeze_pretrained: determines if pretrained layers are frozen
+        :type freeze_pretrained: bool
+
+        :return: float representation of the loss
+        :rtype: float
+        """
         # freeze/unfreeze here: longer runtime, better encapsulation
         if freeze_pretrained:
             module.freeze_pretrained()
@@ -130,35 +273,70 @@ class BatchHandler:
         optimizer.step()
         return float(loss)
 
-    def loss_batch_eval(self, module: Module, batch: list):
+    def loss_batch_eval(self,
+                        module: Module,
+                        batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]) -> float:
+        """
+        calculates the loss on one batch in evaluation mode
+
+        :param module: module to evaluate
+        :type module: Module
+
+        :param batch: batch containing x, y
+        :type batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]
+
+        :return: float representation of the batch loss
+        :rtype: float
+        """
         module.eval()
         with torch.no_grad():
             return float(self.forward_batch(module=module, batch=batch)["loss"])
 
-    def predict_class_labels_batch(self, module: Module, batch: list):
-        scores = self.forward_batch(module=module, batch=batch)["scores"]
-        return torch.argmax(scores, dim=1)
-
-    def train_n_batches(self, module: Module,
+    def train_n_batches(self,
+                        module: Module,
                         optimizer: Optimizer,
                         n_batches: int,
                         loader: DataLoader,
-                        freeze_pretrained: bool):
+                        freeze_pretrained: bool) -> Tuple[List[float], float, float]:
+        """
+        trains a given module on n batches of a given data loader.
+
+        :param module: module to be trained
+        :type module: Module
+
+        :param optimizer: optimizer to train the module
+        :type optimizer: Optimizer
+
+        :param n_batches: number of batches for training
+        :type n_batches: int
+
+        :param loader: data loader used to draw the training data from
+        :type loader: DataLoader
+
+        :param freeze_pretrained: determines if pretrained layers are frozen
+        :type freeze_pretrained: bool
+
+        :return:
+        """
         losses = []
         for train_iter, batch in enumerate(loader):
             if train_iter == n_batches:
                 break
 
-            losses.append(
-                self.train_batch(module=module, optimizer=optimizer, batch=batch, freeze_pretrained=freeze_pretrained))
+            losses.append(self.train_batch(module=module,
+                                           optimizer=optimizer,
+                                           batch=batch,
+                                           freeze_pretrained=freeze_pretrained))
             if (len(losses) % self.setup.monitor_n_losses) == 0:
                 losses_last = np.array(losses[-self.setup.monitor_n_losses:])
                 slope_last, _ = np.polyfit(x=np.arange(len(losses_last)), y=losses_last, deg=1)
                 print("iter", train_iter + 1, "mean loss", losses_last.mean(), "loss slope", slope_last)
         slope_total, bias_total = np.polyfit(x=np.arange(len(losses)), y=losses, deg=1)
-        return losses, slope_total, bias_total
+        return losses, float(slope_total), float(bias_total)
 
-    def lrrt(self, loader: DataLoader, freeze_pretrained: bool = False):
+    def lrrt(self,
+             loader: DataLoader,
+             freeze_pretrained: bool = False) -> Tuple[float, float]:
         """
         Learning Rate Range Test; basic idea:
         for each learning rate in a set of learning rate candidates:
@@ -170,7 +348,14 @@ class BatchHandler:
         modified to rerun with a decayed set of learning rate candidates
         until a max number of iterations or a certain slope is reached.
 
+        :param loader: data loader to draw batches from
+        :type loader: DataLoader
+
+        :param freeze_pretrained: determines if pretrained layers are frozen
+        :type freeze_pretrained: bool
+
         :return: best learning rate, best loss slope
+        :rtype: List[float, float]
         """
         print("lr search using lrrt")
         slope_desired_found = False
@@ -203,17 +388,80 @@ class BatchHandler:
         print("best loss slope", slope_best_total, "best lr", lr_best_total)
         return lr_best_total, slope_best_total
 
+    def loss_epoch_eval(self, module: Module, loader_eval: DataLoader) -> float:
+        """
+        calculates the epoch loss in evaluation mode
+
+        :param module: module to be evaluated
+        :type module: Module
+
+        :param loader_eval: data loader used for evaluation
+        :type loader_eval: DataLoader
+
+        :return: epoch loss
+        :rtype: float
+        """
+        batch_losses = np.zeros(len(loader_eval))
+        for batch_nr, batch in enumerate(loader_eval):
+            batch_losses[batch_nr] = self.loss_batch_eval(module=module, batch=batch)
+        return float(batch_losses.mean())
+
+    def losses_epoch_eval(self, module: Module) -> Tuple[float, float]:
+        """
+        wrapper for loss_epoch_eval
+        calculates epoch loss for training data and validation data
+
+        :param module: module to be evaluated
+        :type module: Module
+
+        :return: training epoch loss, validation epoch loss
+        :rtype: List[float, float]
+        """
+        loss_epoch_train = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_train)
+        loss_epoch_val = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
+        return loss_epoch_train, loss_epoch_val
+
 
 class Debugger(BatchHandler):
+    """
+    used for debugging and hyperparameter optimization.
+    """
     def __init__(self, setup: Setup):
         super(Debugger, self).__init__(setup=setup)
 
-    def overfit_one_batch(self, module: Module,
-                          batch_debug: list,
-                          n_iters: int,
-                          lrrt_loader: DataLoader = None,
-                          lr: float = 1e-5,
-                          freeze_pretrained: bool = False):
+    def overfit_batch(self,
+                      module: Module,
+                      batch_debug: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
+                      n_iters: int,
+                      lrrt_loader: DataLoader = None,
+                      lr: float = 1e-5,
+                      freeze_pretrained: bool = False) -> Tuple[Module, List[float]]:
+        """
+        overfits one batch to determine if the module can learn.
+        used to determine significant bugs in the module structure
+        or the data drawing policy.
+
+        :param module: module to debug
+        :type module: Module
+
+        :param batch_debug: single batch to debug on
+        :type batch_debug: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]
+
+        :param n_iters: determines how many iterations the module is trained on the debug batch
+        :type n_iters: int
+
+        :param lrrt_loader: loader for determining a learning rate using lrrt. lrrt is not used if None
+        :type lrrt_loader: DataLoader
+
+        :param lr: learning rate that is used when lrrt is not used
+        :type lr: float
+
+        :param freeze_pretrained: determines if pretrained layers are frozen
+        :type freeze_pretrained: bool
+
+        :return: module, batch losses
+        :rtype: Tuple[Module, List[float]]
+        """
         if lrrt_loader is not None:
             lr, _ = self.lrrt(loader=lrrt_loader, freeze_pretrained=freeze_pretrained)
         optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr)
@@ -227,11 +475,18 @@ class Debugger(BatchHandler):
 
 
 class Visualizer:
-    def __init__(self):
-        pass
-
+    """
+    used for standard plots
+    """
     @staticmethod
-    def largest_divisor(n: int):
+    def largest_divisor(n: int) -> int:
+        """
+        :param n: a number
+        :type n: int
+
+        :return: largest int divisor of n
+        :rtype: int
+        """
         i = n // 2
         while i > 1:
             if n % i == 0:
@@ -239,37 +494,71 @@ class Visualizer:
             i -= 1
         return 1
 
-    def lines_multiplot(self, lines: list, title: str, multiplot_titles: list, y_label: str, x_label: str, file_name: str):
+    @staticmethod
+    def lines_multiplot(lines: List[List[float]],
+                        title: str,
+                        multiplot_labels: List[str],
+                        y_label: str,
+                        x_label: str,
+                        file_name: str):
         """
         creates multiple lines in the same subplot
-        :param lines:
-        :param title:
-        :param multiplot_titles:
-        :param y_label:
-        :param x_label:
-        :param file_name:
-        :return:
+
+        :param lines: float representations of lines to plot
+        :type lines: List[List[float]]
+
+        :param title: figure title
+        :type title: str
+
+        :param multiplot_labels: line labels
+        :type multiplot_labels: List[List[str]]
+
+        :param y_label: y label
+        :type y_label: str
+
+        :param x_label: x label
+        :type x_label: str
+
+        :param file_name: name of the file in which the figure is stored
+        :type file_name: str
         """
         plt.figure(figsize=(4, 4))
         for i, line in enumerate(lines):
-            plt.plot(range(len(line)), line, label=multiplot_titles[i])
+            plt.plot(range(len(line)), line, label=multiplot_labels[i])
+        plt.title(title)
         plt.ylabel = y_label
         plt.xlabel = x_label
         plt.legend()
         plt.tight_layout()
         plt.savefig(f"../monitoring/{file_name}.png")
 
-    def lines_subplot(self, lines: list, title: str, subplot_titles: list, y_label: str, x_label: str, file_name: str):
+    def lines_subplot(self,
+                      lines: List[List[float]],
+                      title: str,
+                      subplot_titles: List[str],
+                      y_label: str,
+                      x_label: str,
+                      file_name: str):
         """
         creates multiple lines in individual subplots
 
-        :param lines:
-        :param title:
-        :param subplot_titles:
-        :param y_label:
-        :param x_label:
-        :param file_name:
-        :return:
+        :param lines: float representations of lines to plot
+        :type lines: List[List[float]]
+
+        :param title: figure title
+        :type title: str
+
+        :param subplot_titles: line labels
+        :type subplot_titles: List[List[str]]
+
+        :param y_label: y label
+        :type y_label: str
+
+        :param x_label: x label
+        :type x_label: str
+
+        :param file_name: name of the file in which the figure is stored
+        :type file_name: str
         """
         n_lines = len(lines)
         n_cols = self.largest_divisor(n=n_lines)
@@ -287,28 +576,27 @@ class Visualizer:
 
 
 class Trainer(BatchHandler):
+    """
+    used for training
+    """
     def __init__(self, setup: Setup):
         super(Trainer, self).__init__(setup=setup)
 
-    def loss_epoch_eval(self, module: Module, loader_eval: DataLoader):
-        batch_losses = np.zeros(len(loader_eval))
-        for batch_nr, batch in enumerate(loader_eval):
-            batch_losses[batch_nr] = self.loss_batch_eval(module=module, batch=batch)
-        return float(batch_losses.mean())
-
-    def losses_epoch_eval(self, module: Module):
-        loss_epoch_train = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_train)
-        loss_epoch_val = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
-        return loss_epoch_train, loss_epoch_val
-
-    def train_n_epochs_early_stop_initial_lrrt(self, max_epochs: int, freeze_pretrained: bool = False):
+    def train(self,
+              max_epochs: int,
+              freeze_pretrained: bool = False) -> Tuple[Module, List[float], List[float], List[float]]:
         """
-        determines the initial learning rate per epoch using lrrt.
-        early stops (naively after one early stop violation)
+        training procedure
+        can perform learning rate range test and early stopping if specified in the setup.
 
-        :param int max_epochs: max #training epochs after determining the initial learning rate with lrrt
-        :param bool freeze_pretrained:
-        :return: early stopped trained module, lrrt chosen learning rates, epoch train losses, epoch val losses
+        :param max_epochs: maximum amount of training epochs
+        :type max_epochs: int
+
+        :param freeze_pretrained: determines if pretrained layers are frozen
+        :type freeze_pretrained: bool
+
+        :return: trained module, epoch learning rates, epoch train losses, epoch validation losses
+        :rtype: List[Module, List[float], List[float], List[float]]
         """
         es_violations = 0
         losses_train = []
@@ -361,7 +649,23 @@ class Trainer(BatchHandler):
                     break
         return load_secure(self.setup.checkpoint_final), best_lrs, losses_train, losses_val
 
-    def train_overkill_one_epoch(self, lr_initial: float, freeze_pretrained: bool):
+    def train_overkill_epoch(self, lr_initial: float, freeze_pretrained: bool) -> Tuple[List[float], float, int]:
+        """
+        one epoch of overkill training
+        for each batch, overkill training decays the learning rate until an improvement
+        on the epoch validation loss is achieved or a maximum number of decays is reached.
+        only updates the running checkpoint if an improvement is achieved.
+        this can (and most likely will) overfit the validation data leading to worse performance on test
+
+        :param lr_initial: initial learning rate
+        :type lr_initial: float
+
+        :param freeze_pretrained: determines if pretrained layers are frozen
+        :type freeze_pretrained: bool
+
+        :return: list of used learning rates, last (updated) validation loss, #batches on which no update was performed
+        :rtype: List[List[float], float, int]
+        """
         violation_counter = len(self.setup.loader_train)
         best_lrs = []
         module = load_secure(self.setup.checkpoint_running)
@@ -369,8 +673,11 @@ class Trainer(BatchHandler):
         for i, batch in enumerate(self.setup.loader_train):
             print("iter", i+1, "of", len(self.setup.loader_train))
             lr = lr_initial
-            loss = np.inf
-            for i in range(self.setup.overkill_max_decays):
+            for _ in range(self.setup.overkill_max_decays + 1):
+                module = load_secure(self.setup.checkpoint_running)
+                optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr)
+                self.train_batch(module=module, optimizer=optimizer, batch=batch, freeze_pretrained=freeze_pretrained)
+                loss = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
                 if loss < loss_val_last:
                     print("improvement, loss", loss)
                     loss_val_last = loss
@@ -378,14 +685,28 @@ class Trainer(BatchHandler):
                     best_lrs.append(lr)
                     violation_counter -= 1
                     break
-                module = load_secure(self.setup.checkpoint_running)
-                optimizer = self.setup.optimizer_class(params=module.parameters(), lr=lr)
-                self.train_batch(module=module, optimizer=optimizer, batch=batch, freeze_pretrained=freeze_pretrained)
-                loss = self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val)
                 lr = lr * self.setup.overkill_decay
-        return best_lrs, loss, violation_counter
+        return best_lrs, loss_val_last, violation_counter
 
-    def train_overkill(self, max_epochs: int, freeze_pretrained: bool = False):
+    def train_overkill(self,
+                       max_epochs: int,
+                       freeze_pretrained: bool = False) -> Tuple[Module, List[float], List[float], List[float]]:
+        """
+        performs multiple epochs of overkill training.
+        early stops when less than a desired amount of updates was performed per epoch.
+        in each epoch, the initial learning rate is adapted to the optimal learning rates in the
+        previous epoch.
+        see train_overkill_epoch for more details.
+
+        :param max_epochs: max number of performed training epochs
+        :type max_epochs: int
+
+        :param freeze_pretrained: determines if pretrained layers are frozen
+        :type freeze_pretrained: bool
+
+        :return: trained module, learning rates that lead to improvement, train epoch losses, validation epoch losses
+        :rtype: List[Module, List[float], List[float], List[float]]
+        """
         losses_train = []
         losses_val = []
         best_lrs = []
@@ -395,14 +716,15 @@ class Trainer(BatchHandler):
         losses_val.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_val))
         for epoch in range(max_epochs):
             print("epoch", epoch + 1)
-            best_lrs_epoch, loss_val_epoch, violations = self.train_overkill_one_epoch(freeze_pretrained=freeze_pretrained, lr_initial=lr)
+            best_lrs_epoch, loss_val_epoch, violations = self.train_overkill_epoch(freeze_pretrained=freeze_pretrained,
+                                                                                   lr_initial=lr)
             best_lrs.append(best_lrs_epoch)
             losses_val.append(loss_val_epoch)
             module = load_secure(self.setup.checkpoint_running)
             losses_train.append(self.loss_epoch_eval(module=module, loader_eval=self.setup.loader_train))
             print("train loss:", losses_train[-1])
             print("val loss:", losses_val[-1])
-            lr = float(torch.tensor(best_lrs[-1]).mean())
+            lr = float(torch.tensor(best_lrs[-1]).mean()) * 1.25
             if violations >= self.setup.overkill_max_violations:
                 print("too few updates in this epoch, convergence")
                 break

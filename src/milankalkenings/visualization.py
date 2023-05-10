@@ -1,3 +1,4 @@
+import torch
 from . utils import largest_divisor
 import matplotlib.pyplot as plt
 from typing import List
@@ -42,6 +43,51 @@ def lines_multiplot(lines: List[List[float]],
     plt.savefig(save_file)
 
 
+def images_subplot(images: List[torch.Tensor],
+                   title: str,
+                   subplot_titles: List[str],
+                   save_file: str):
+    """
+    creates multiple subplots within one figure.
+    each subplot shows an image.
+
+    :param images: torch Tensors representing RGB images
+    :type images: List[torch.Tensor]
+
+    :param title: figure title
+    :type title: str
+
+    :param subplot_titles: image labels
+    :type subplot_titles: List[str]
+
+    :param save_file: name of the file in which the figure is stored
+    :type save_file: str
+    """
+    n_images = len(images)
+    num_cols = largest_divisor(n=n_images)
+    num_rows = n_images // num_cols
+    fig, axs = plt.subplots(num_rows, num_cols, figsize=(num_cols * 4, num_rows * 4))
+    plt.suptitle(title)
+    if num_cols == 1:
+        for i, img in enumerate(images):
+            image_tensor = images[i].detach()
+            image_array = image_tensor.permute(1, 2, 0).numpy()
+            axs[i].imshow(image_array)
+            axs[i].set_title(subplot_titles[i])
+            axs[i].axis('off')
+    else:
+        for i, img in enumerate(images):
+            row_idx = i // num_cols
+            col_idx = i % num_cols
+            image_tensor = images[i].detach()
+            image_array = image_tensor.permute(1, 2, 0).numpy()
+            axs[row_idx, col_idx].imshow(image_array)
+            axs[row_idx, col_idx].set_title(subplot_titles[i])
+            axs[row_idx, col_idx].axis('off')
+    plt.tight_layout()
+    plt.savefig(save_file)
+
+
 def lines_subplot(lines: List[List[float]],
                   title: str,
                   subplot_titles: List[str],
@@ -59,7 +105,7 @@ def lines_subplot(lines: List[List[float]],
     :type title: str
 
     :param subplot_titles: line labels
-    :type subplot_titles: List[List[str]]
+    :type subplot_titles: List[str]
 
     :param y_label: y label
     :type y_label: str
@@ -80,6 +126,7 @@ def lines_subplot(lines: List[List[float]],
         plt.title(subplot_titles[i])
         plt.ylabel(y_label)
         plt.xlabel(x_label)
+        plt.ticklabel_format(useOffset=False)
         plt.plot(range(len(lines[i])), lines[i])
     plt.tight_layout()
     plt.savefig(save_file)

@@ -162,7 +162,7 @@ class Trainer:
 
     def loss_epoch_eval(self, module: Module, loader_eval: DataLoader) -> float:
         """
-        calculates the total epoch loss in evaluation mode
+        calculates the mean loss over all batches of one epoch in evaluation mode
 
         :param module: module to be evaluated
         :type module: Module
@@ -173,10 +173,27 @@ class Trainer:
         :return: epoch loss
         :rtype: float
         """
+        return float(self.loss_epoch_eval_per_batch(module=module, loader_eval=loader_eval).mean())
+
+    def loss_epoch_eval_per_batch(self, module: Module, loader_eval: DataLoader) -> torch.Tensor:
+        """
+        calculates the individual batch loss for an epoch in evaluation mode
+
+        :param module: module to be evaluated
+        :type module: Module
+
+        :param loader_eval: data loader used for evaluation
+        :type loader_eval: DataLoader
+
+        :return: 1d tensor containing all individual batch losses
+        :rtype: torch.Tensor
+        """
         batch_losses = torch.zeros(size=[len(loader_eval)])
         for batch_nr, batch in enumerate(loader_eval):
             batch_losses[batch_nr] = self.loss_batch_eval(module=module, batch=batch)
-        return float(batch_losses.sum())
+        return batch_losses
+
+
 
     def losses_epoch_eval(self, module: Module) -> Tuple[float, float]:
         """

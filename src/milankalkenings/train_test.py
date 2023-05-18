@@ -5,33 +5,27 @@ from torch.utils.data import DataLoader
 from torch.optim import Optimizer
 from typing import Union, List, Tuple
 
-from . modules import Module, ModuleOutput
-from . utils import load_secure, save_secure
-from . visualization import lines_subplot
+from .modules import Module, ModuleOutput
+from .visualization import lines_subplot
 
 
 class Trainer:
     def __init__(self,
-                 module: Module,
                  loader_train: DataLoader,
                  loader_val: DataLoader,
                  loader_test: DataLoader,
                  optimizer_class,
-                 device: str = "cpu",
-                 checkpoint_running: str = "../monitoring/checkpoint_running.pkl",
-                 checkpoint_final: str = "../monitoring/checkpoint_final.pkl"):
+                 device: str = "cpu"):
         self.loader_train = loader_train
         self.loader_val = loader_val
         self.loader_test = loader_test
         self.optimizer_class = optimizer_class
         self.device = device
-        self.checkpoint_running = checkpoint_running
-        self.checkpoint_final = checkpoint_final
-        save_secure(module=module, file=checkpoint_running)
 
     def forward_batch(self,
                       module: Module,
-                      batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]) -> ModuleOutput:
+                      batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[
+                          torch.Tensor, List[torch.Tensor]]]) -> ModuleOutput:
         """
         performs a forward pass with a given module and batch.
 
@@ -86,7 +80,8 @@ class Trainer:
 
     def loss_batch_eval(self,
                         module: Module,
-                        batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]) -> float:
+                        batch: Tuple[
+                            Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]) -> float:
         """
         calculates the loss on one batch in evaluation mode
 
@@ -193,8 +188,6 @@ class Trainer:
             batch_losses[batch_nr] = self.loss_batch_eval(module=module, batch=batch)
         return batch_losses
 
-
-
     def losses_epoch_eval(self, module: Module) -> Tuple[float, float]:
         """
         wrapper for loss_epoch_eval
@@ -212,7 +205,8 @@ class Trainer:
 
     def overfit_batch(self,
                       module: Module,
-                      batch_debug: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
+                      batch_debug: Tuple[
+                          Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
                       n_iters: int,
                       lr: float = 1e-5,
                       freeze_pretrained: bool = False) -> Tuple[Module, List[float]]:
@@ -248,13 +242,17 @@ class Trainer:
         return module, losses
 
     def train(self,
+              module: Module,
               n_epochs: int,
               lrs: List[float],
-              early_stopping_max_violations: int = None,
+              early_stopping_patience: int,
               freeze_pretrained: bool = False,
               printouts: bool = True) -> Tuple[Module, List[float], List[float]]:
         """
         training procedure
+
+        :param module: module to be trained
+        :type module: Module
 
         :param n_epochs: maximum amount of training epochs
         :type n_epochs: int
@@ -262,10 +260,9 @@ class Trainer:
         :param lrs: learning rates, one per epoch
         :type lrs: List[float]
 
-        :param early_stopping_max_violations: maximum amount of subsequent early stopping violations until the training
-        is stopped. No early stopping is performed when early_stopping_max_violations = None
-
-        :type early_stopping_max_violations: int
+        :param early_stopping_patience: maximum amount of subsequent early stopping violations until the training
+        is stopped.
+        :type early_stopping_patience: int
 
         :param freeze_pretrained: determines if pretrained layers are frozen
         :type freeze_pretrained: bool
@@ -276,19 +273,22 @@ class Trainer:
         :return: trained module, epoch train losses, epoch validation losses
         :rtype: List[Module, List[float], List[float]]
         """
+        module_final = copy.deepcopy(module)
+
         early_stopping_violations = 0
         losses_train = []
         losses_val = []
 
-        module = load_secure(self.checkpoint_running)
+        loss_train, loss_val = self.losses_epoch_eval(module=module)
+        if printouts:
+            print("before training:")
+            print("eval loss val", loss_val, "eval loss train", loss_train)
+        losses_train.append(loss_train)
+        losses_val.append(loss_val)
+        loss_val_last = losses_val[-1]
 
         # init optimizer here and change arguments only, so that gradient history is kept throughout epochs
         optimizer = self.optimizer_class(params=module.parameters(), lr=lrs[0])
-        loss_train, loss_val_last = self.losses_epoch_eval(module=module)
-        if printouts:
-            print("eval loss val", loss_val_last, "eval loss train", loss_train)
-        losses_train.append(loss_train)
-        losses_val.append(loss_val_last)
 
         for epoch in range(1, n_epochs + 1):
             if printouts:
@@ -312,22 +312,21 @@ class Trainer:
 
             # early stopping checkpointing
             if loss_val < loss_val_last:
-                save_secure(module=module, file=self.checkpoint_running)
-                save_secure(module=module, file=self.checkpoint_final)
+                module_final = copy.deepcopy(module)
                 if printouts:
                     print("loss improvement achieved, final checkpoint updated")
                 loss_val_last = loss_val
                 early_stopping_violations = 0
             else:
                 early_stopping_violations += 1
-                save_secure(module=module, file=self.checkpoint_running)
                 if printouts:
-                    print("no loss improvement, es violations:", early_stopping_violations, "of", early_stopping_max_violations)
-                if early_stopping_violations == early_stopping_max_violations:
+                    print("no loss improvement, es violations:", early_stopping_violations, "of",
+                          early_stopping_patience)
+                if early_stopping_violations == early_stopping_patience:
                     if printouts:
                         print("early stopping")
                     break
-        return load_secure(self.checkpoint_final), losses_train, losses_val
+        return module_final, losses_train, losses_val
 
     def acc_epoch_eval(self, module: Module, loader_eval: DataLoader) -> float:
         module.eval()
@@ -341,14 +340,16 @@ class Trainer:
         labels = torch.cat(labels)
         return float(torch.sum(preds == labels) / len(labels))
 
-    def determine_initial_lr(self, module: Module, n_iters: int, lr_candidates: List[float], batch_debug: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]], save_file: str, freeze_pretrained: bool = False) -> None:
+    def determine_initial_lr(self, module: Module, n_iters: int, lr_candidates: List[float], batch_debug: Tuple[
+        Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]], save_file: str,
+                             freeze_pretrained: bool = False) -> None:
         all_losses = []
         for lr_candidate in lr_candidates:
-            _, losses =self.overfit_batch(module=copy.deepcopy(module),
-                                          batch_debug=batch_debug,
-                                          n_iters=n_iters,
-                                          lr=lr_candidate,
-                                          freeze_pretrained=freeze_pretrained)
+            _, losses = self.overfit_batch(module=copy.deepcopy(module),
+                                           batch_debug=batch_debug,
+                                           n_iters=n_iters,
+                                           lr=lr_candidate,
+                                           freeze_pretrained=freeze_pretrained)
             all_losses.append(losses)
         lines_subplot(lines=all_losses,
                       title="lr debugging",

@@ -10,22 +10,39 @@ from .visualization import lines_subplot
 
 
 class Trainer:
-    def __init__(self,
-                 loader_train: DataLoader,
-                 loader_val: DataLoader,
-                 loader_test: DataLoader,
-                 optimizer_class,
-                 device: str = "cpu"):
+    def __init__(
+            self,
+            loader_train: DataLoader,
+            loader_val: DataLoader,
+            loader_test: DataLoader,
+            optimizer_class,
+            device: str = "cpu"):
+        """
+        :param loader_train: train loader
+        :type loader_train: DataLoader
+
+        :param loader_val: validation loader
+        :type loader_val: DataLoader
+
+        :param loader_test: test loader
+        :type loader_test: DataLoader
+
+        :param optimizer_class: class of the optimizer used
+
+        :param device: cpu / cuda
+        :type device: str
+        """
         self.loader_train = loader_train
         self.loader_val = loader_val
         self.loader_test = loader_test
         self.optimizer_class = optimizer_class
         self.device = device
 
-    def forward_batch(self,
-                      module: Module,
-                      batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[
-                          torch.Tensor, List[torch.Tensor]]]) -> ModuleOutput:
+    def forward_batch(
+            self,
+            module: Module,
+            batch: Tuple[
+                Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]) -> ModuleOutput:
         """
         performs a forward pass with a given module and batch.
 
@@ -43,11 +60,12 @@ class Trainer:
         y = y.to(self.device)
         return module(x=x, y=y)
 
-    def train_batch(self,
-                    module: Module,
-                    optimizer: Optimizer,
-                    batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
-                    freeze_pretrained: bool = False) -> float:
+    def train_batch(
+            self,
+            module: Module,
+            optimizer: Optimizer,
+            batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
+            freeze_pretrained: bool = False) -> float:
         """
         train on one batch
 
@@ -78,10 +96,10 @@ class Trainer:
         optimizer.step()
         return float(loss)
 
-    def loss_batch_eval(self,
-                        module: Module,
-                        batch: Tuple[
-                            Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]) -> float:
+    def loss_batch_eval(
+            self,
+            module: Module,
+            batch: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]) -> float:
         """
         calculates the loss on one batch in evaluation mode
 
@@ -203,13 +221,14 @@ class Trainer:
         loss_epoch_val = self.loss_epoch_eval(module=module, loader_eval=self.loader_val)
         return loss_epoch_train, loss_epoch_val
 
-    def overfit_batch(self,
-                      module: Module,
-                      batch_debug: Tuple[
-                          Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
-                      n_iters: int,
-                      lr: float = 1e-5,
-                      freeze_pretrained: bool = False) -> Tuple[Module, List[float]]:
+    def overfit_batch(
+            self,
+            module: Module,
+            batch_debug: Tuple[
+                Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
+            n_iters: int,
+            lr: float = 1e-5,
+            freeze_pretrained: bool = False) -> Tuple[Module, List[float]]:
         """
         overfits one batch to determine if the module can learn.
         used to determine significant bugs
@@ -241,13 +260,21 @@ class Trainer:
                                            freeze_pretrained=freeze_pretrained))
         return module, losses
 
-    def train(self,
-              module: Module,
-              n_epochs: int,
-              lrs: List[float],
-              early_stopping_patience: int,
-              freeze_pretrained: bool = False,
-              printouts: bool = True) -> Tuple[Module, List[float], List[float]]:
+    def change_lr_(self, optimizer: torch.optim.Optimizer, lr: float):
+        """
+        changes the learning rate for all parameters in the optimizer
+        """
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
+
+    def train(
+            self,
+            module: Module,
+            n_epochs: int,
+            lrs: List[float],
+            early_stopping_patience: int,
+            freeze_pretrained: bool = False,
+            printouts: bool = True) -> Tuple[Module, List[float], List[float]]:
         """
         training procedure
 
@@ -294,9 +321,7 @@ class Trainer:
             if printouts:
                 print("training epoch", epoch)
             # epoch training
-            for pg in optimizer.param_groups:
-                pg["lr"] = lrs[epoch - 1]
-
+            self.change_lr_(optimizer=optimizer, lr=lrs[epoch - 1])
             self.train_n_batches(module=module,
                                  optimizer=optimizer,
                                  n_batches=len(self.loader_train),
@@ -328,7 +353,22 @@ class Trainer:
                     break
         return module_final, losses_train, losses_val
 
-    def acc_epoch_eval(self, module: Module, loader_eval: DataLoader) -> float:
+    def acc_epoch_eval(
+            self,
+            module: Module,
+            loader_eval: DataLoader) -> float:
+        """
+        calculates the module accuracy on one epoch of the used loader
+
+        :param module: module to be evaluated
+        :type module: Module
+
+        :param loader_eval: data loader used for evaluation (train, val, test)
+        :type loader_eval: DataLoader
+
+        :return: accuracy averaged over epoch
+        :rtype: float
+        """
         module.eval()
         preds = []
         labels = []
@@ -340,9 +380,36 @@ class Trainer:
         labels = torch.cat(labels)
         return float(torch.sum(preds == labels) / len(labels))
 
-    def determine_initial_lr(self, module: Module, n_iters: int, lr_candidates: List[float], batch_debug: Tuple[
-        Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]], save_file: str,
-                             freeze_pretrained: bool = False) -> None:
+    def determine_initial_lr(
+            self,
+            module: Module,
+            n_iters: int,
+            lr_candidates: List[float],
+            batch_debug: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]],
+            save_file: str,
+            freeze_pretrained: bool = False) -> List[List[float]]:
+        """
+        :param module: module to determine initial lr for
+        :type module: Module
+
+        :param n_iters: number of iterations performed with every lr candidate
+        :type n_iters: int
+
+        :param lr_candidates: candidate lrs, good starting point: [0.01, 0.001, 0.0001, 0.00001]
+        :type lr_candidates: List[float]
+
+        :param batch_debug: one batch on which the initial learning rate is determined
+        :type batch_debug: Tuple[Union[torch.Tensor, List[torch.Tensor]], Union[torch.Tensor, List[torch.Tensor]]]
+
+        :param save_file: file in which the resulting plots are saved
+        :type save_file: str
+
+        :param freeze_pretrained: freeze pretraiend module parameters or not
+        :type freeze_pretrained: bool
+
+        :return: per lr_candidate a list of iteration losses
+        :rtype: List[List[float]]
+        """
         all_losses = []
         for lr_candidate in lr_candidates:
             _, losses = self.overfit_batch(module=copy.deepcopy(module),
@@ -353,7 +420,10 @@ class Trainer:
             all_losses.append(losses)
         lines_subplot(lines=all_losses,
                       title="lr debugging",
-                      subplot_titles=["lr " + str(lr) for lr in lr_candidates],
+                      subplot_titles=[
+                          "lr " + str(lr_candidates[i]) + " last loss:" + "{:.10f}".format(all_losses[i][-1]) for i in
+                          range(len(lr_candidates))],
                       x_label="iteration",
                       y_label="loss",
                       save_file=save_file)
+        return all_losses
